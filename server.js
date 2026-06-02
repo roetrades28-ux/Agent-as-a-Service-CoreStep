@@ -34,13 +34,14 @@ app.post('/api/notifications/run-weekly-digest', mvpGate, async (req, res) => {
   try {
     const preview = req.query.preview === 'true';
     const previewEmail = req.query.email;
+    const sendTo = req.query.sendTo; // optional: deliver to a different address than previewEmail
 
     if (preview && !previewEmail) {
       return res.status(400).json({ error: 'preview=true requires ?email= param' });
     }
 
     console.log(`[server] POST /api/notifications/run-weekly-digest preview=${preview}`);
-    const result = await runWeeklyDigest({ preview, previewEmail });
+    const result = await runWeeklyDigest({ preview, previewEmail, sendTo });
     return res.json({ ok: true, ...result });
   } catch (err) {
     console.error('[server] Weekly digest error:', err);

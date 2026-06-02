@@ -32,8 +32,8 @@ ALTER TABLE public.waitlist_submissions
 
 -- Backfill subscribed_at for existing rows
 UPDATE public.waitlist_submissions
-  SET subscribed_at = created_at
-  WHERE subscribed_at IS NULL AND created_at IS NOT NULL;
+  SET subscribed_at = updated_at
+  WHERE subscribed_at IS NULL AND updated_at IS NOT NULL;
 
 -- Index for drip cron query
 CREATE INDEX IF NOT EXISTS waitlist_drip_idx

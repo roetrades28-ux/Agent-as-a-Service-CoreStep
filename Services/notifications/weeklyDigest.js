@@ -30,7 +30,7 @@ Use first person ("You..."). Do not include quotes around your response.`;
 
   try {
     const result = await aiFree.models.generateContent({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-2.5-flash',
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
     });
     return result.candidates[0].content.parts[0].text.trim();
@@ -38,7 +38,7 @@ Use first person ("You..."). Do not include quotes around your response.`;
     if (err?.status === 429 || err?.message?.includes('quota')) {
       // Fallback to paid key
       const result2 = await aiPaid.models.generateContent({
-        model: 'gemini-2.0-flash',
+        model: 'gemini-2.5-flash',
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
       });
       return result2.candidates[0].content.parts[0].text.trim();
@@ -97,9 +97,39 @@ async function logSend({ email, type, status, metadata }) {
 }
 
 // ─── Per-user digest logic ───────────────────────────────────────────────────
-async function processUser(user, { preview } = {}) {
+async function processUser(user, { preview, previewFakeData, deliverTo } = {}) {
   const email = user.email;
+  const sendToEmail = deliverTo || email; // actual delivery address (may differ in preview)
   const name = email.split('@')[0]; // fallback name — replace with profile first_name if available
+
+  // ── Preview shortcut: use fake sample data, skip all DB queries ────────────
+  if (previewFakeData) {
+    const fakeTrades = [
+      { id: '1', symbol: 'SPY', realized_pnl: 320, closed_at: new Date(Date.now() - 1 * 86400000).toISOString(), flagged: false, opened_at: new Date().toISOString() },
+      { id: '2', symbol: 'AAPL', realized_pnl: -95, closed_at: new Date(Date.now() - 2 * 86400000).toISOString(), flagged: true, opened_at: new Date().toISOString() },
+      { id: '3', symbol: 'TSLA', realized_pnl: 210, closed_at: new Date(Date.now() - 3 * 86400000).toISOString(), flagged: false, opened_at: new Date().toISOString() },
+      { id: '4', symbol: 'QQQ', realized_pnl: -45, closed_at: new Date(Date.now() - 3 * 86400000).toISOString(), flagged: true, opened_at: new Date().toISOString() },
+      { id: '5', symbol: 'NVDA', realized_pnl: 180, closed_at: new Date(Date.now() - 4 * 86400000).toISOString(), flagged: false, opened_at: new Date().toISOString() },
+    ];
+    const stats = computeStats(fakeTrades);
+    let ralleInsight = '';
+    try {
+      ralleInsight = await generateRalleInsight(stats);
+    } catch (err) {
+      ralleInsight = 'Your 2 flagged trades this week both hit their stop early — consider reviewing your entry timing on high-volatility names like AAPL and QQQ before sizing in full.';
+    }
+    const html = weeklyDigest({ name, email, stats, ralleInsight });
+    const pnlStr = `${stats.netPnl >= 0 ? '+' : ''}$${Math.abs(stats.netPnl)}`;
+    const subject = `Your week in review — ${pnlStr} P&L, ${stats.winRate}% win rate`;
+    try {
+      await sendEmail({ to: sendToEmail, subject, html });
+      console.log(`[WeeklyDigest] ✓ Preview digest sent to ${sendToEmail}`);
+      return { email, status: 'sent', type: 'weekly_digest', preview: true };
+    } catch (err) {
+      console.error(`[WeeklyDigest] ✗ Preview send failed:`, err.message);
+      return { email, status: 'failed', error: err.message };
+    }
+  }
 
   // 1. Check opt-out preference
   const { data: pref } = await supabase
@@ -117,7 +147,7 @@ async function processUser(user, { preview } = {}) {
   weekAgo.setDate(weekAgo.getDate() - 7);
   const { data: weekTrades } = await supabase
     .from('trades')
-    .select('id, symbol, side, realized_pnl, closed_at, flagged, opened_at')
+    .select('id, symbol, realized_pnl, closed_at, flagged, opened_at')
     .eq('app_user_id', user.id)
     .not('closed_at', 'is', null)
     .gte('closed_at', weekAgo.toISOString())
@@ -193,9 +223,9 @@ async function processUser(user, { preview } = {}) {
 
   // 5. Send
   try {
-    await sendEmail({ to: email, subject, html });
+    await sendEmail({ to: sendToEmail, subject, html });
     if (!preview) await logSend({ email, type: notifType, status: 'sent', metadata: { daysSince } });
-    console.log(`[WeeklyDigest] ✓ Sent ${notifType} to ${email}`);
+    console.log(`[WeeklyDigest] ✓ Sent ${notifType} to ${sendToEmail}`);
     return { email, status: 'sent', type: notifType };
   } catch (err) {
     console.error(`[WeeklyDigest] ✗ Failed for ${email}:`, err.message);
@@ -211,18 +241,20 @@ async function processUser(user, { preview } = {}) {
  * @param {boolean} [opts.preview] — if true, send only to opts.previewEmail, don't log
  * @param {string}  [opts.previewEmail]
  */
-async function runWeeklyDigest({ preview = false, previewEmail } = {}) {
+async function runWeeklyDigest({ preview = false, previewEmail, sendTo } = {}) {
   console.log(`[WeeklyDigest] Starting run — preview=${preview}`);
 
   if (preview && previewEmail) {
-    // Preview mode: send to single address using a fake user object
-    const { data: user } = await supabase
+    // Preview mode: use real data if user exists in app_users, otherwise fake data
+    const { data: realUser } = await supabase
       .from('app_users')
       .select('id, email')
       .eq('email', previewEmail)
       .maybeSingle();
-    if (!user) return { error: `User not found: ${previewEmail}` };
-    const result = await processUser(user, { preview: true });
+
+    const user = realUser || { id: 'preview-id', email: previewEmail };
+    // sendTo lets you deliver to a different inbox while pulling real data for previewEmail
+    const result = await processUser(user, { preview: true, previewFakeData: !realUser, deliverTo: sendTo || previewEmail });
     return { results: [result] };
   }
 
