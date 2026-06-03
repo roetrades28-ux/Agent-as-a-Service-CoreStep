@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: corestep-notifications
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: RESEND_API_KEY
+        sync: false
+      - key: INTERNAL_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: Default_Gemini_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FRONTEND_URL
+        value: https://corestep.app
+      - key: NOTIFICATIONS_FROM_EMAIL
+        value: ralle@corestep.app
+      - key: NOTIFICATIONS_FROM_NAME
+        value: CoreStep TradingLab
