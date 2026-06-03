@@ -23,9 +23,11 @@ const FROM = `${process.env.NOTIFICATIONS_FROM_NAME || 'CoreStep TradingLab'} <$
  * @param {string} opts.html
  * @returns {Promise<{id: string}>}
  */
-async function sendEmail({ to, subject, html }) {
+async function sendEmail({ to, subject, html, attachments }) {
   const resend = getResendClient();
-  const { data, error } = await resend.emails.send({ from: FROM, to, subject, html });
+  const payload = { from: FROM, to, subject, html };
+  if (attachments && attachments.length > 0) payload.attachments = attachments;
+  const { data, error } = await resend.emails.send(payload);
   if (error) throw new Error(`Resend error: ${JSON.stringify(error)}`);
   return data;
 }

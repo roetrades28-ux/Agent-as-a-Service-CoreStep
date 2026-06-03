@@ -180,6 +180,52 @@ a{color:#00d4a8;text-decoration:none;}</style>
   }
 });
 
+// ─── GET /api/chart/donut ────────────────────────────────────────────────────
+// Returns a dynamic donut SVG image based on query params.
+// Used by weekly digest email — Gmail blocks inline SVG but renders <img> src.
+// Params: wr (win rate 0-100), wins, losses, color (hex no #), bg (hex no #)
+app.get('/api/chart/donut', (req, res) => {
+  const wr     = Math.max(0, Math.min(100, parseInt(req.query.wr) || 0));
+  const wins   = parseInt(req.query.wins)   || 0;
+  const losses = parseInt(req.query.losses) || 0;
+  const color  = `#${(req.query.color || '00C7A7').replace(/^#/, '')}`;
+  const bg     = `#${(req.query.bg    || '080D0A').replace(/^#/, '')}`;
+
+  const CX = 57, CY = 57, R = 55, HOLE = 40;
+  const toRad = d => (d - 90) * Math.PI / 180;
+  function arcPath(startDeg, endDeg) {
+    const s = toRad(startDeg), e = toRad(endDeg);
+    const large = (endDeg - startDeg) > 180 ? 1 : 0;
+    const x1 = (CX + R * Math.cos(s)).toFixed(2), y1 = (CY + R * Math.sin(s)).toFixed(2);
+    const x2 = (CX + R * Math.cos(e)).toFixed(2), y2 = (CY + R * Math.sin(e)).toFixed(2);
+    return `M${CX},${CY}L${x1},${y1}A${R},${R},0,${large},1,${x2},${y2}Z`;
+  }
+
+  const sweep = (wr / 100) * 360;
+  let arcs;
+  if (wr === 0) {
+    arcs = `<circle cx="${CX}" cy="${CY}" r="${R}" fill="rgba(255,255,255,0.07)"/>`;
+  } else if (wr === 100) {
+    arcs = `<circle cx="${CX}" cy="${CY}" r="${R}" fill="${color}"/>`;
+  } else {
+    arcs = `<path d="${arcPath(0, sweep)}" fill="${color}"/>` +
+           `<path d="${arcPath(sweep, 360)}" fill="rgba(255,255,255,0.08)"/>`;
+  }
+
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="114" height="114" viewBox="0 0 114 114" xmlns="http://www.w3.org/2000/svg">
+  ${arcs}
+  <circle cx="${CX}" cy="${CY}" r="${HOLE}" fill="${bg}"/>
+  <text x="${CX}" y="50" text-anchor="middle" fill="${color}" font-size="22" font-weight="bold" font-family="Arial,sans-serif">${wr}%</text>
+  <text x="${CX}" y="62" text-anchor="middle" fill="rgba(255,255,255,0.3)" font-size="7" font-weight="bold" font-family="Arial,sans-serif" letter-spacing="3">WIN RATE</text>
+  <text x="${CX}" y="74" text-anchor="middle" fill="rgba(255,255,255,0.2)" font-size="9" font-family="Arial,sans-serif">${wins}W \xB7 ${losses}L</text>
+</svg>`;
+
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.send(svg);
+});
+
 // ─── Start ───────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 4001;
 app.listen(PORT, () => {

@@ -51,13 +51,43 @@ Use first person ("You..."). Do not include quotes around your response.`;
 function computeStats(trades) {
   if (!trades || trades.length === 0) return null;
 
+  const sorted = [...trades].sort((a, b) => new Date(a.closed_at) - new Date(b.closed_at));
   const netPnl = Math.round(trades.reduce((s, t) => s + (t.realized_pnl || 0), 0));
   const wins = trades.filter(t => (t.realized_pnl || 0) > 0);
+  const losses = trades.filter(t => (t.realized_pnl || 0) < 0);
   const winRate = Math.round((wins.length / trades.length) * 100);
   const flaggedCount = trades.filter(t => t.flagged).length;
-  const sorted = [...trades].sort((a, b) => (b.realized_pnl || 0) - (a.realized_pnl || 0));
-  const bestTrade = sorted[0] || null;
-  const worstTrade = sorted[sorted.length - 1] || null;
+
+  const byPnl = [...trades].sort((a, b) => (b.realized_pnl || 0) - (a.realized_pnl || 0));
+  const bestTrade = byPnl[0] || null;
+  const worstTrade = byPnl[byPnl.length - 1] || null;
+
+  const grossWins = wins.reduce((s, t) => s + (t.realized_pnl || 0), 0);
+  const grossLosses = Math.abs(losses.reduce((s, t) => s + (t.realized_pnl || 0), 0));
+  const profitFactor = grossLosses > 0 ? Math.round((grossWins / grossLosses) * 100) / 100 : grossWins > 0 ? 9.99 : 0;
+  const avgWin = wins.length > 0 ? Math.round(grossWins / wins.length) : 0;
+  const avgLoss = losses.length > 0 ? Math.round(grossLosses / losses.length) : 0;
+  const avgPnlPerTrade = Math.round(netPnl / trades.length);
+
+  // Day win rate — % of trading days with net positive P&L
+  const dayMap = {};
+  for (const t of trades) {
+    const day = new Date(t.closed_at).toISOString().slice(0, 10);
+    if (!dayMap[day]) dayMap[day] = 0;
+    dayMap[day] += t.realized_pnl || 0;
+  }
+  const days = Object.values(dayMap);
+  const dayWinRate = days.length > 0 ? Math.round((days.filter(d => d > 0).length / days.length) * 100) : 0;
+
+  // Consistency score — composite of winRate + dayWinRate + profitFactor capped at 100
+  const consistencyScore = Math.min(100, Math.round((winRate * 0.4) + (dayWinRate * 0.4) + (Math.min(profitFactor, 5) / 5 * 100 * 0.2)));
+
+  // Equity curve — cumulative P&L over time (sorted by closed_at)
+  let cumulative = 0;
+  const equityCurve = sorted.map(t => {
+    cumulative += t.realized_pnl || 0;
+    return Math.round(cumulative);
+  });
 
   // Group by hour for AI context
   const tradesByHour = {};
@@ -69,7 +99,13 @@ function computeStats(trades) {
     tradesByHour[bucket].pnl += t.realized_pnl || 0;
   }
 
-  return { netPnl, winRate, tradeCount: trades.length, flaggedCount, bestTrade, worstTrade, tradesByHour };
+  return {
+    netPnl, winRate, tradeCount: trades.length, flaggedCount,
+    bestTrade, worstTrade, tradesByHour,
+    wins: wins.length, losses: losses.length,
+    profitFactor, avgWin, avgLoss, avgPnlPerTrade,
+    dayWinRate, consistencyScore, equityCurve,
+  };
 }
 
 // ─── Duplicate send guard ────────────────────────────────────────────────────
@@ -147,11 +183,24 @@ async function processUser(user, { preview, previewFakeData, deliverTo } = {}) {
   weekAgo.setDate(weekAgo.getDate() - 7);
   const { data: weekTrades } = await supabase
     .from('trades')
-    .select('id, symbol, realized_pnl, closed_at, flagged, opened_at')
+    .select('id, symbol, realized_pnl, closed_at, flagged, opened_at, source, broker')
     .eq('app_user_id', user.id)
     .not('closed_at', 'is', null)
     .gte('closed_at', weekAgo.toISOString())
     .order('closed_at', { ascending: false });
+
+  // Deduplicate trades by (symbol, closed_at rounded to minute, realized_pnl)
+  // The app deduplicates; CSV imports can create exact duplicates in the DB
+  const seen = new Set();
+  const dedupedTrades = (weekTrades || []).filter(t => {
+    const key = `${t.symbol}|${t.realized_pnl}|${t.closed_at?.slice(0, 16)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (weekTrades && dedupedTrades.length !== weekTrades.length) {
+    console.log(`[WeeklyDigest] ${email} — deduped ${weekTrades.length} → ${dedupedTrades.length} trades (removed ${weekTrades.length - dedupedTrades.length} duplicates)`);
+  }
 
   // 3. Get last trade date for re-engagement check
   const { data: lastTradeRows } = await supabase
@@ -193,7 +242,7 @@ async function processUser(user, { preview, previewFakeData, deliverTo } = {}) {
     subject = `${name}, your journal is waiting${lastStats ? ` — last session: ${lastStats.netPnl >= 0 ? '+' : ''}$${Math.abs(lastStats.netPnl)}` : ''}`;
     notifType = 'reengagement';
 
-  } else if (!weekTrades || weekTrades.length === 0) {
+  } else if (dedupedTrades.length === 0) {
     // Quiet week — no trades
     if (!preview && await alreadySentThisWeek(email, 'quiet_week')) {
       return { email, status: 'skipped', reason: 'already_sent' };
@@ -207,7 +256,7 @@ async function processUser(user, { preview, previewFakeData, deliverTo } = {}) {
     if (!preview && await alreadySentThisWeek(email, 'weekly_digest')) {
       return { email, status: 'skipped', reason: 'already_sent' };
     }
-    const stats = computeStats(weekTrades);
+    const stats = computeStats(dedupedTrades);
     let ralleInsight = '';
     try {
       ralleInsight = await generateRalleInsight(stats);
@@ -215,7 +264,8 @@ async function processUser(user, { preview, previewFakeData, deliverTo } = {}) {
       console.error(`[WeeklyDigest] Gemini error for ${email}:`, err.message);
       ralleInsight = 'Review your flagged trades from this week — they often contain the most actionable lessons.';
     }
-    html = weeklyDigest({ name, email, stats, ralleInsight });
+    const digestResult = weeklyDigest({ name, email, stats, ralleInsight });
+    html = digestResult.html;
     const pnlStr = `${stats.netPnl >= 0 ? '+' : ''}$${Math.abs(stats.netPnl)}`;
     subject = `Your week in review — ${pnlStr} P&L, ${stats.winRate}% win rate`;
     notifType = 'weekly_digest';

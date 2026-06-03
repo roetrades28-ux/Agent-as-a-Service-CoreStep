@@ -1,5 +1,36 @@
 'use strict';
 
+// ─── Donut URL builder (QuickChart.io — inbox-safe external image) ───────────
+function buildDonutUrl(winRate, wins, losses, color) {
+  const config = {
+    type: 'doughnut',
+    data: {
+      datasets: [{
+        data: [wins, losses || 0],
+        backgroundColor: [color, '#1C221F'],
+        borderWidth: 0,
+      }],
+    },
+    options: {
+      cutoutPercentage: 95,
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: false },
+        datalabels: { display: false },
+        doughnutlabel: {
+          labels: [
+            { text: `${winRate}%`, color: color, font: { size: 22, weight: 'bold', family: 'Arial' } },
+            { text: 'WIN RATE', color: 'rgba(255,255,255,0.3)', font: { size: 7, family: 'Arial' } },
+            { text: `${wins}W · ${losses}L`, color: 'rgba(255,255,255,0.2)', font: { size: 9, family: 'Arial' } },
+          ],
+        },
+      },
+    },
+  };
+  const encoded = encodeURIComponent(JSON.stringify(config));
+  return `https://quickchart.io/chart?w=160&h=160&bkg=%23080D0A&c=${encoded}`;
+}
+
 // ─── Shared design tokens ───────────────────────────────────────────────────
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://corestep.app';
 
@@ -11,7 +42,7 @@ const LOGO_SVG = `
 </svg>`;
 
 const BASE_STYLES = `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=DM+Serif+Display:ital@0;1&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500&family=DM+Serif+Display:ital@0;1&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;}
 .shell{background:#f2f0eb;padding:40px 20px 60px;font-family:'Inter',sans-serif;}
 .email{max-width:540px;margin:0 auto;}
@@ -122,6 +153,12 @@ const BASE_STYLES = `
   .soft-strip{flex-direction:column;align-items:flex-start;gap:10px;}
   .progress-bar{flex-direction:column;align-items:flex-start;gap:8px;}
   .bw-meta{display:none;}
+  /* ── Performance card responsive ── */
+  .card-2col{display:block !important;width:100% !important;border-right:none !important;border-bottom:1px solid rgba(255,255,255,0.05) !important;box-sizing:border-box !important;}
+  .card-pnl-num{font-size:40px !important;letter-spacing:-0.03em !important;}
+  .card-donut-td{display:none !important;}
+  .card-trade-pnl{font-size:22px !important;}
+  .card-header-pill{font-size:9px !important;padding:4px 10px !important;letter-spacing:0 !important;}
 }
 `;
 
@@ -215,80 +252,166 @@ function weekRange() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Full weekly digest — user has closed trades this week.
- * @param {object} p
- * @param {string} p.name
- * @param {string} p.email
- * @param {object} p.stats  { netPnl, winRate, tradeCount, flaggedCount, bestTrade, worstTrade }
- * @param {string} p.ralleInsight  — Gemini-generated coaching sentence(s)
- * @param {string} [p.unsubscribeUrl]
+ * Full weekly digest — futuristic dark CoreStep Performance Card.
  */
 function weeklyDigest({ name, email, stats, ralleInsight, unsubscribeUrl }) {
-  const { netPnl, winRate, tradeCount, flaggedCount, bestTrade, worstTrade } = stats;
-  const pnlClass = netPnl >= 0 ? 'green' : 'red';
+  const {
+    netPnl, winRate, tradeCount, flaggedCount,
+    bestTrade, worstTrade,
+    wins, losses, profitFactor, avgWin, avgLoss, avgPnlPerTrade,
+    dayWinRate, consistencyScore, equityCurve,
+  } = stats;
+
   const range = weekRange();
   const unsubUrl = unsubscribeUrl || `${FRONTEND_URL}/api/notifications/unsubscribe?email=${encodeURIComponent(email)}&type=digest`;
+  const TEAL = '#00C7A7';
+  const RED   = '#FF2D55';
+  const AMBER = '#F5C542';
+  const pnlColor = netPnl >= 0 ? TEAL : RED;
+
+  // ── Donut — QuickChart.io hosted image (inbox-safe, no MIME attachment needed) ──
+  const donutUrl = buildDonutUrl(winRate, wins, losses, pnlColor);
+  const donutHtml = `<img src="${donutUrl}" width="160" height="160" alt="Win Rate: ${winRate}%" style="display:block;" border="0"/>`;
+
+  // ── Equity curve — <path> based SVG (survives Gmail better than polyline) ──
+  const equitySvg = (() => {
+    const curve = equityCurve && equityCurve.length > 1 ? equityCurve : [0, Math.round(netPnl * 0.4), Math.round(netPnl * 0.7), netPnl];
+    const W = 500, H = 80, pad = 8;
+    const minV = Math.min(0, ...curve);
+    const maxV = Math.max(...curve) || 1;
+    const span = (maxV - minV) || 1;
+    const toX = i => Math.round((i / (curve.length - 1)) * W);
+    const toY = v => Math.round(H - pad - ((v - minV) / span) * (H - pad * 2));
+    const coordPairs = curve.map((v, i) => `${toX(i)} ${toY(v)}`);
+    const linePath  = `M ${coordPairs.join(' L ')}`;
+    const lastX = toX(curve.length - 1);
+    const lastY = toY(curve[curve.length - 1]);
+    const fillPath  = `M 0 ${H} L ${coordPairs.join(' L ')} L ${W} ${H} Z`;
+    return `<svg width="500" height="80" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:80px;display:block;" preserveAspectRatio="none">
+  <defs>
+    <linearGradient id="ecg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${RED}" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="${RED}" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <path d="${fillPath}" fill="url(#ecg)"/>
+  <path d="${linePath}" fill="none" stroke="${RED}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="${lastX}" cy="${lastY}" r="5" fill="${RED}"/>
+</svg>`;
+  })();
+
+  // ── Progress bar ──────────────────────────────────────────────────────────
+  function bar(label, pct, display, color) {
+    const w = Math.min(100, Math.max(2, Math.round(pct)));
+    return `<div style="margin-bottom:13px;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:5px;"><tr>
+    <td style="font-size:10.5px;color:rgba(242,245,243,0.35);font-weight:500;font-family:Manrope,Arial,sans-serif;">${label}</td>
+    <td align="right" style="font-size:12.5px;font-weight:700;color:${color};font-family:Manrope,Arial,sans-serif;letter-spacing:-0.2px;white-space:nowrap;">${display}</td>
+  </tr></table>
+  <div style="background:rgba(255,255,255,0.07);border-radius:99px;height:5px;overflow:hidden;">
+    <div style="width:${w}%;height:5px;background:${color};border-radius:99px;"></div>
+  </div>
+</div>`;
+  }
+
+  // ── Trade row — table-based so accent line always aligns ─────────────────
+  function tradeRow(pnl, symbol, date, color) {
+    return `<table cellpadding="0" cellspacing="0" border="0" style="margin-bottom:14px;width:100%;"><tr>
+  <td width="3" style="width:3px;padding:0;background:${color};border-radius:2px;" valign="top">&nbsp;</td>
+  <td width="10" style="width:10px;">&nbsp;</td>
+  <td>
+    <div class="card-trade-pnl" style="font-size:28px;font-weight:800;color:${color};line-height:1;letter-spacing:-0.025em;font-family:Manrope,Arial,sans-serif;">${pnl}</div>
+    <div style="font-size:9.5px;color:rgba(242,245,243,0.22);font-weight:400;margin-top:4px;letter-spacing:0.02em;font-family:Manrope,Arial,sans-serif;">${symbol} &middot; ${date} &middot; futures</div>
+  </td>
+</tr></table>`;
+  }
+
+  const pfPct  = Math.min(100, Math.round((Math.min(profitFactor, 5) / 5) * 100));
+  const aplPct = Math.min(100, Math.max(2, Math.round(((avgPnlPerTrade + 300) / 600) * 100)));
 
   const body = `
-<p class="greeting">Hey ${name},</p>
-<p class="para">Here's what your trading looked like this week. Numbers are pulled directly from your connected accounts.</p>
+<p class="greeting" style="font-size:16px;font-weight:500;color:#1a1a18;margin-bottom:18px;">Hey ${name},</p>
+<p class="para" style="line-height:1.85;">Your weekly performance card is ready. Every number is pulled live from your connected brokerage — no estimates.</p>
 
-<div class="dark-card">
-  <div class="card-glow"></div>
-  <div class="card-badge"><div class="card-badge-dot"></div><div class="card-badge-text">Performance snapshot</div></div>
-  <div class="stats-period">${range}</div>
-  <div class="stats-grid">
-    <div class="stat-box">
-      <div class="stat-val ${pnlClass}">${fmtPnl(netPnl)}</div>
-      <div class="stat-lbl">Net P&amp;L</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-val">${winRate}%</div>
-      <div class="stat-lbl">Win Rate</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-val">${tradeCount}</div>
-      <div class="stat-lbl">Trades</div>
-    </div>
-    <div class="stat-box ${flaggedCount > 0 ? 'flagged' : ''}">
-      <div class="stat-val ${flaggedCount > 0 ? 'amber' : ''}">${flaggedCount}</div>
-      <div class="stat-lbl">Flagged</div>
-    </div>
+<!-- ═══════════════ CORESTEP PERFORMANCE CARD ═══════════════ -->
+<div style="width:100%;max-width:100%;box-sizing:border-box;background:#080D0A;background-image:radial-gradient(circle,rgba(126,135,148,0.18) 1px,transparent 1px);background-size:22px 22px;border-radius:16px;border:1px solid rgba(0,199,167,0.14);overflow:hidden;margin:22px 0 28px;box-shadow:0 0 90px rgba(0,199,167,0.07) inset,0 0 140px rgba(139,92,246,0.04) inset;font-family:Manrope,Arial,sans-serif;">
+
+  <!-- ① Header -->
+  <div style="padding:16px 20px 14px;border-bottom:1px solid rgba(255,255,255,0.05);">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td>
+        <div style="font-size:13px;font-weight:800;color:#F2F5F3;letter-spacing:0.14em;text-transform:uppercase;line-height:1.1;">CORESTEP</div>
+        <div style="font-size:7.5px;font-weight:600;color:${TEAL};letter-spacing:0.26em;text-transform:uppercase;margin-top:3px;">PERFORMANCE CARD</div>
+      </td>
+      <td align="right" valign="middle">
+        <span class="card-header-pill" style="display:inline-block;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.11);border-radius:99px;padding:5px 14px;font-size:10px;font-weight:500;color:rgba(242,245,243,0.4);letter-spacing:0.03em;white-space:nowrap;">${range}</span>
+      </td>
+    </tr></table>
   </div>
-  <div class="bw-divider"></div>
-  ${bestTrade ? `
-  <div class="bw-row">
-    <div class="bw-left">
-      <span class="bw-arrow" style="color:#00d4a8;">▲</span>
-      <span class="bw-sym">${bestTrade.symbol}</span>
-      <span class="bw-meta">${bestTrade.side || ''} &middot; ${fmtDate(bestTrade.closed_at)}</span>
-    </div>
-    <span class="bw-pnl" style="color:#00d4a8;">${fmtPnl(bestTrade.realized_pnl)}</span>
-  </div>` : ''}
-  ${worstTrade ? `
-  <div class="bw-row">
-    <div class="bw-left">
-      <span class="bw-arrow" style="color:#ef4444;">▼</span>
-      <span class="bw-sym">${worstTrade.symbol}</span>
-      <span class="bw-meta">${worstTrade.side || ''} &middot; ${fmtDate(worstTrade.closed_at)}</span>
-    </div>
-    <span class="bw-pnl" style="color:#ef4444;">${fmtPnl(worstTrade.realized_pnl)}</span>
-  </div>` : ''}
-</div>
 
-<div class="ralle-block">
-  <div class="ralle-tag">Rall-E noticed</div>
-  <p class="ralle-text">${ralleInsight}</p>
+  <!-- ② P&L + donut -->
+  <div style="padding:20px 20px 0;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td valign="top">
+        <div style="font-size:8px;letter-spacing:0.24em;text-transform:uppercase;color:rgba(242,245,243,0.3);font-weight:600;margin-bottom:8px;">NET P&amp;L &middot; WEEKLY</div>
+        <div class="card-pnl-num" style="font-size:52px;font-weight:900;color:${pnlColor};line-height:0.92;letter-spacing:-0.03em;font-family:Manrope,Arial,sans-serif;text-shadow:0 0 28px ${netPnl >= 0 ? 'rgba(0,199,167,0.38)' : 'rgba(255,45,85,0.38)'};">${fmtPnl(netPnl)}</div>
+        <div style="font-size:11px;color:rgba(242,245,243,0.22);font-weight:400;margin-top:10px;letter-spacing:0.02em;">${tradeCount} trade${tradeCount !== 1 ? 's' : ''} &nbsp;&middot;&nbsp; avg ${fmtPnl(avgPnlPerTrade)} / trade</div>
+      </td>
+      <td class="card-donut-td" align="right" valign="top" width="114" style="width:114px;padding-top:2px;padding-left:12px;">${donutHtml}</td>
+    </tr></table>
+  </div>
+
+  <!-- ③ Best/Worst + Consistency — TABLE layout, class-hooked for responsive collapse -->
+  <div style="margin-top:20px;border-top:1px solid rgba(255,255,255,0.05);">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+
+      <td class="card-2col" width="50%" valign="top" style="padding:16px 18px 16px 20px;border-right:1px solid rgba(255,255,255,0.05);">
+        <div style="font-size:7.5px;letter-spacing:0.24em;text-transform:uppercase;color:rgba(242,245,243,0.2);font-weight:700;margin-bottom:14px;">BEST / WORST TRADE</div>
+        ${bestTrade ? tradeRow(fmtPnl(bestTrade.realized_pnl), bestTrade.symbol, fmtDate(bestTrade.closed_at), TEAL) : ''}
+        ${worstTrade && worstTrade.id !== bestTrade?.id ? tradeRow(fmtPnl(worstTrade.realized_pnl), worstTrade.symbol, fmtDate(worstTrade.closed_at), RED) : ''}
+        <table cellpadding="0" cellspacing="0" border="0" style="margin-top:4px;"><tr>
+          <td style="padding-right:7px;"><span style="display:inline-block;background:rgba(0,199,167,0.09);border:1px solid rgba(0,199,167,0.25);border-radius:99px;padding:5px 12px;font-size:9.5px;font-weight:700;color:${TEAL};letter-spacing:0.05em;white-space:nowrap;">AVG WIN ${fmtPnl(avgWin)}</span></td>
+          <td><span style="display:inline-block;background:rgba(255,45,85,0.09);border:1px solid rgba(255,45,85,0.25);border-radius:99px;padding:5px 12px;font-size:9.5px;font-weight:700;color:${RED};letter-spacing:0.05em;white-space:nowrap;">AVG LOSS $${avgLoss}</span></td>
+        </tr></table>
+      </td>
+
+      <td class="card-2col" width="50%" valign="top" style="padding:16px 20px 16px 18px;">
+        <div style="font-size:7.5px;letter-spacing:0.24em;text-transform:uppercase;color:rgba(242,245,243,0.2);font-weight:700;margin-bottom:14px;">CONSISTENCY METRICS</div>
+        ${bar('Consistency Score', consistencyScore, `${consistencyScore}%`, AMBER)}
+        ${bar('Profit Factor',     pfPct,            profitFactor.toFixed(2), RED)}
+        ${bar('Day Win Rate',      dayWinRate,       `${dayWinRate}%`,        TEAL)}
+        ${bar('Avg P/L per Trade', aplPct,           fmtPnl(avgPnlPerTrade),  TEAL)}
+      </td>
+
+    </tr></table>
+  </div>
+
+  <!-- ④ Equity curve -->
+  <div style="background:#040907;border-top:1px solid rgba(255,255,255,0.05);padding:14px 20px 0;">
+    <div style="font-size:7.5px;letter-spacing:0.24em;text-transform:uppercase;color:rgba(242,245,243,0.2);font-weight:700;margin-bottom:10px;">EQUITY CURVE</div>
+    ${equitySvg}
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding:8px 0 14px;"><tr>
+      <td style="font-size:9px;color:rgba(242,245,243,0.18);letter-spacing:0.06em;font-weight:500;font-family:Manrope,Arial,sans-serif;">&#9679;&nbsp;WEEKLY P/L</td>
+      <td align="right" style="font-size:9px;color:rgba(0,199,167,0.5);letter-spacing:0.06em;font-weight:500;font-family:Manrope,Arial,sans-serif;">&#9679;&nbsp;CoreStep</td>
+    </tr></table>
+  </div>
+
+</div>
+<!-- ══════════════════════════════════════════════════════════ -->
+
+<!-- Rall-E insight -->
+<div style="background:#111914;border-radius:6px;border-left:2px solid ${TEAL};padding:20px 22px;margin:0 0 24px;">
+  <div style="font-size:8.5px;letter-spacing:0.24em;text-transform:uppercase;color:${TEAL};font-weight:700;margin-bottom:10px;text-shadow:0 0 12px rgba(0,199,167,0.4);">RALL-E NOTICED</div>
+  <p style="font-size:13.5px;line-height:1.8;color:#e8f5f2;font-weight:300;margin:0;font-family:Inter,Arial,sans-serif;">${ralleInsight}</p>
 </div>
 
 <div class="cta-row">
-  <a class="cta-primary" href="${FRONTEND_URL}/JournalDashboard">Review my journal &rarr;</a>
-  ${flaggedCount > 0 ? `<a class="cta-secondary" href="${FRONTEND_URL}/JournalDashboard?filter=flagged">Review ${flaggedCount} flagged trade${flaggedCount > 1 ? 's' : ''}</a>` : ''}
+  <a class="cta-primary" href="${FRONTEND_URL}/JournalDashboard" style="display:inline-block;background:#00d4a8;text-decoration:none;padding:13px 24px;border-radius:4px;font-size:13px;font-weight:600;letter-spacing:0.04em;"><span style="color:#111914;text-decoration:none;">Open my journal &rarr;</span></a>
+  ${flaggedCount > 0 ? `<a class="cta-secondary" href="${FRONTEND_URL}/JournalDashboard?filter=flagged" style="display:inline-block;background:rgba(245,158,11,0.08);border:0.5px solid rgba(245,158,11,0.35);text-decoration:none;padding:13px 24px;border-radius:4px;font-size:13px;font-weight:600;letter-spacing:0.04em;"><span style="color:#f59e0b;text-decoration:none;">Review ${flaggedCount} flagged trade${flaggedCount > 1 ? 's' : ''}</span></a>` : ''}
 </div>
 
 <div class="rule"></div>
 <div class="next-title">While you're here</div>
-
 <div class="item">
   <div class="item-n">01</div>
   <div>
@@ -299,25 +422,27 @@ function weeklyDigest({ name, email, stats, ralleInsight, unsubscribeUrl }) {
 <div class="item">
   <div class="item-n">02</div>
   <div>
-    <p class="item-t">Tag this week's trades</p>
-    <p class="item-d">Ask Rall-E to tag your trades by setup type. 10 seconds now makes next week's review far more useful.</p>
+    <p class="item-t">Ask Rall-E about this week</p>
+    <p class="item-d">Type "analyze my week" in the chat. Rall-E cross-references your setups, entry timing, and sizing in seconds.</p>
   </div>
 </div>`;
 
-  return shell({
+  const html = shell({
     subject: `Your week in review — ${fmtPnl(netPnl)} P&L, ${winRate}% win rate`,
     headerTagline: 'Weekly digest',
     heroWatermark: 'Week',
     heroLabelText: range,
-    heroH: `${netPnl >= 0 ? 'Good week' : 'Tough week'}, ${name}.<br><em>Let's look closer.</em>`,
-    heroSub: `Your performance snapshot is ready. Rall-E reviewed your trades and flagged one pattern worth your attention.`,
+    heroH: `${netPnl >= 0 ? 'Solid week,' : 'Tough week,'} ${name}.<br><em>Here's the full picture.</em>`,
+    heroSub: `${tradeCount} trades closed · ${winRate}% win rate · Profit factor ${profitFactor.toFixed(2)} · Rall-E has one thing to tell you.`,
     body,
     signClose: 'See you next Sunday,',
-    signName: 'Rall-E · CoreStep',
-    signRole: 'Your AI trading analyst',
-    footerAudience: "You're receiving this as a beta user.",
+    signName: 'Rall-E · CoreStep TradingLab',
+    signRole: 'AI trading analyst',
+    footerAudience: "You're receiving this as a CoreStep beta user.",
     unsubscribeUrl: unsubUrl,
   });
+
+  return { html };
 }
 
 /**
