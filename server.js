@@ -227,15 +227,16 @@ app.get('/api/chart/donut', (req, res) => {
 });
 
 // ─── Self-scheduled cron jobs ─────────────────────────────────────────────────
+// Sunday 5:00pm EDT = 21:00 UTC (summer, EDT = UTC-4)
 // Sunday 5:00pm EST = 22:00 UTC (winter, EST = UTC-5)
 const cron = require('node-cron');
 
-cron.schedule('0 22 * * 0', async () => {
+cron.schedule('0 21 * * 0', async () => {
   console.log('[Cron] Running weekly digest...');
   try { await runWeeklyDigest(); } catch (e) { console.error('[Cron] Digest error:', e.message); }
 });
 
-cron.schedule('15 22 * * 0', async () => {
+cron.schedule('15 21 * * 0', async () => {
   console.log('[Cron] Running waitlist drip...');
   try { await runWaitlistDrip(); } catch (e) { console.error('[Cron] Drip error:', e.message); }
 });
@@ -245,6 +246,6 @@ const PORT = process.env.PORT || 4001;
 app.listen(PORT, () => {
   console.log(`\n  CoreStep Agent-as-a-Service`);
   console.log(`  Running on port ${PORT}`);
-  console.log(`  Digest cron:  Sunday 5:00pm EST (22:00 UTC)`);
+  console.log(`  Digest cron:  Sunday 5:00pm EDT (21:00 UTC)`);
   console.log(`  Drip cron:    Sunday 5:15pm EST (22:15 UTC)\n`);
 });
