@@ -264,5 +264,5 @@ app.listen(PORT, () => {
   console.log(`\n  CoreStep Agent-as-a-Service`);
   console.log(`  Running on port ${PORT}`);
   console.log(`  Digest cron:  Sunday 5:00pm EDT (21:00 UTC)`);
-  console.log(`  Drip cron:    Sunday 5:15pm EST (22:15 UTC)\n`);
+  console.log(`  Drip cron:    Sunday 5:15pm EDT (21:15 UTC)\n`);
 });
