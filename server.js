@@ -230,6 +230,23 @@ app.get('/api/chart/donut', (req, res) => {
 // Sunday 5:00pm EDT = 21:00 UTC (summer, EDT = UTC-4)
 // Sunday 5:00pm EST = 22:00 UTC (winter, EST = UTC-5)
 const cron = require('node-cron');
+const https = require('https');
+
+// Sunday 9:00am EDT = 13:00 UTC
+cron.schedule('0 13 * * 0', () => {
+  console.log('[Cron] Sending Discord weekly review reminder...');
+  const body = JSON.stringify({
+    username: 'Rall-E',
+    content: '@everyone\n\n📔 **Weekly Review Time**\n\nHey traders — it\'s Sunday. Time to close the books on this week.\n\nDrop your weekly review below:\n→ What worked this week?\n→ What did you repeat that you said you wouldn\'t?\n→ One rule you\'re carrying into next week.\n\nYour CoreStep Performance Card lands in your inbox this afternoon — but don\'t wait for it. Do the review now, while it\'s raw.\n\n— Rall-E 🤖',
+  });
+  const url = new URL('https://discord.com/api/webhooks/1511569402431275010/LtYq6Yd0hdcZdGpeot2e11AUh_daq249MP7KoUzVYhGb19V1DjSy8fWidlrZ4QroTl5U');
+  const req = https.request({ hostname: url.hostname, path: url.pathname, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, res => {
+    console.log(`[Cron] Discord reminder sent: ${res.statusCode}`);
+  });
+  req.on('error', e => console.error('[Cron] Discord reminder error:', e.message));
+  req.write(body);
+  req.end();
+});
 
 cron.schedule('0 21 * * 0', async () => {
   console.log('[Cron] Running weekly digest...');
